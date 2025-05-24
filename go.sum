@@ -1,2 +1,4 @@
+github.com/sfomuseum/go-csvdict/v2 v2.0.1 h1:jeiidDN5722R7MBvUk5zn6oywKWTPXv2JKuRwP46CHA=
+github.com/sfomuseum/go-csvdict/v2 v2.0.1/go.mod h1:ZZR7Ez7cDu/jOilHhFc1GFOs1scCuV5kUqRINkHV60I=
 github.com/urfave/cli/v3 v3.3.2 h1:BYFVnhhZ8RqT38DxEYVFPPmGFTEf7tJwySTXsVRrS/o=
 github.com/urfave/cli/v3 v3.3.2/go.mod h1:FJSKtM/9AiiTOJL4fJ6TbMUkxBXn7GO9guZqoZtpYpo=
