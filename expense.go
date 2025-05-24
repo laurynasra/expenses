@@ -63,14 +63,29 @@ func MapWiseExpense(row map[string]string) (*Expense, error) {
 	}, nil
 }
 
-func parseAndAggregate(fileName string) (*ExpenseCategories, []*Expense, error) {
+func mapRevolutExpense(row map[string]string) (*Expense, error) {
+	amount, err := strconv.ParseFloat(row["Amount"], 64)
+	if err != nil {
+		return nil, err
+	}
+	description := row["Description"]
+	return &Expense{
+		Amount:      amount,
+		Description: description,
+		Provider:    "Revolut",
+	}, nil
+}
+
+func parseAndAggregate(fileName string, provider string) (*ExpenseCategories, []*Expense, error) {
 	expenseCategories := &ExpenseCategories{}
 
 	expenseCategories.AddCategory(&ExpenseCategory{
 		Amount:   0,
 		Category: "IGNORE",
 		Matchers: []string{
-			"laurynas ragauskas", "nexo", "apple", "cashback", "converted", "laurynas", "ragauskas",
+			"laurynas ragauskas", "nexo", "apple",
+			"cashback", "converted", "laurynas", "ragauskas",
+			"youtube",
 		},
 	})
 
@@ -78,7 +93,7 @@ func parseAndAggregate(fileName string) (*ExpenseCategories, []*Expense, error) 
 		Amount:   0,
 		Category: "Food",
 		Matchers: []string{
-			"maxima", "lidl", "vaisiai", "darzov", "iki ", "rimi", "mangas",
+			"maxima", "lidl", "vaisiai", "darzov", "iki", "rimi", "mangas",
 			"mangu", "turgelis",
 		},
 	})
@@ -141,7 +156,7 @@ func parseAndAggregate(fileName string) (*ExpenseCategories, []*Expense, error) 
 		},
 	})
 
-	parsedExpenses, nil := parseExpenses(fileName)
+	parsedExpenses, nil := parseExpenses(fileName, provider)
 	for _, expense := range parsedExpenses {
 		for _, expenseCategory := range expenseCategories.categories {
 			if expenseCategory.Match(strings.ToLower(expense.Description)) {
@@ -192,7 +207,8 @@ func main() {
 				},
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					fileName := cmd.String("file")
-					expenseCategories, parsedExpenses, err := parseAndAggregate(fileName)
+					provider := cmd.String("provider")
+					expenseCategories, parsedExpenses, err := parseAndAggregate(fileName, provider)
 					if err != nil {
 						return err
 					}
@@ -219,10 +235,7 @@ func main() {
 	}
 }
 
-func parseExpenses(fileName string) ([]*Expense, error) {
-	// _ := cmd.String("provider")
-	// fileName := cmd.String("file")
-
+func parseExpenses(fileName string, provider string) ([]*Expense, error) {
 	r, err := readFile(fileName)
 	if err != nil {
 		return nil, err
@@ -230,12 +243,21 @@ func parseExpenses(fileName string) ([]*Expense, error) {
 
 	expenses := []*Expense{}
 
+	var mapper func(map[string]string) (*Expense, error)
+
+	if provider == "wise" {
+		mapper = MapWiseExpense
+	} else if provider == "revolut" {
+		mapper = mapRevolutExpense
+	} else {
+		return nil, fmt.Errorf("provider %s not supported", provider)
+	}
+
 	for row, err := range r.Iterate() {
 		if err != nil {
 			return nil, err
 		}
-		// fmt.Println("Amount:", row["Amount"], "Description:", row["Description"])
-		expense, err := MapWiseExpense(row)
+		expense, err := mapper(row)
 		if err != nil {
 			return nil, err
 		}
