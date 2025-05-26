@@ -2,14 +2,15 @@ package main
 
 import (
 	"context"
+	"encoding/csv"
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/sfomuseum/go-csvdict/v2"
 	"github.com/urfave/cli/v3"
 )
 
@@ -76,6 +77,20 @@ func mapRevolutExpense(row map[string]string) (*Expense, error) {
 	}, nil
 }
 
+func mapSEBExpense(row map[string]string) (*Expense, error) {
+	amount, err := strconv.ParseFloat(strings.ReplaceAll(row["SUMA"], ",", "."), 64)
+	if err != nil {
+		return nil, err
+	}
+	description := strings.Join([]string{row["MOKĖTOJO ARBA GAVĖJO PAVADINIMAS"], row["MOKĖJIMO PASKIRTIS"], row["TRANSAKCIJOS TIPAS"]}, " ")
+
+	return &Expense{
+		Amount:      amount,
+		Description: description,
+		Provider:    "SEB",
+	}, nil
+}
+
 func parseAndAggregate(fileName string, provider string) (*ExpenseCategories, []*Expense, error) {
 	expenseCategories := &ExpenseCategories{}
 
@@ -85,7 +100,8 @@ func parseAndAggregate(fileName string, provider string) (*ExpenseCategories, []
 		Matchers: []string{
 			"laurynas ragauskas", "nexo", "apple",
 			"cashback", "converted", "laurynas", "ragauskas",
-			"youtube",
+			"youtube", "išmoka", "paslaugų planas", "ltg", "kredito", "palūkanų",
+			"mokykla", "agentūra", "polisą", "revolut", "telia",
 		},
 	})
 
@@ -94,7 +110,7 @@ func parseAndAggregate(fileName string, provider string) (*ExpenseCategories, []
 		Category: "Food",
 		Matchers: []string{
 			"maxima", "lidl", "vaisiai", "darzov", "iki", "rimi", "mangas",
-			"mangu", "turgelis",
+			"mangu", "turgelis", "arviora",
 		},
 	})
 
@@ -112,7 +128,7 @@ func parseAndAggregate(fileName string, provider string) (*ExpenseCategories, []
 		Amount:   0,
 		Category: "Transport",
 		Matchers: []string{
-			"express pro", "circle k", "orlen", "p8",
+			"express pro", "circle k", "orlen", "p8", "uab stova",
 		},
 	})
 
@@ -167,7 +183,6 @@ func parseAndAggregate(fileName string, provider string) (*ExpenseCategories, []
 			}
 		}
 	}
-	fmt.Println(expenseCategories)
 	unmatchedExpenses := []*Expense{}
 	for _, expense := range parsedExpenses {
 		if !expense.Matched {
@@ -178,7 +193,7 @@ func parseAndAggregate(fileName string, provider string) (*ExpenseCategories, []
 }
 
 func main() {
-	// parseAndAggregate("statement_11267423_EUR_2025-05-01_2025-05-24.csv")
+	parseAndAggregate("./Išrašas (1).csv", "seb")
 	supportedProviders := []string{"Wise", "SEB", "Revolut"}
 	cmd := &cli.Command{
 		Commands: []*cli.Command{
@@ -236,11 +251,10 @@ func main() {
 }
 
 func parseExpenses(fileName string, provider string) ([]*Expense, error) {
-	r, err := readFile(fileName)
+	rawExpenses, err := readFile(fileName, provider)
 	if err != nil {
 		return nil, err
 	}
-
 	expenses := []*Expense{}
 
 	var mapper func(map[string]string) (*Expense, error)
@@ -249,14 +263,13 @@ func parseExpenses(fileName string, provider string) ([]*Expense, error) {
 		mapper = MapWiseExpense
 	} else if provider == "revolut" {
 		mapper = mapRevolutExpense
+	} else if provider == "seb" {
+		mapper = mapSEBExpense
 	} else {
 		return nil, fmt.Errorf("provider %s not supported", provider)
 	}
 
-	for row, err := range r.Iterate() {
-		if err != nil {
-			return nil, err
-		}
+	for _, row := range rawExpenses {
 		expense, err := mapper(row)
 		if err != nil {
 			return nil, err
@@ -267,57 +280,90 @@ func parseExpenses(fileName string, provider string) ([]*Expense, error) {
 	return expenses, nil
 }
 
-func readFile(fileName string) (*csvdict.Reader, error) {
-	r, err := csvdict.NewReaderFromPath(fileName)
+func mapSlicesToMap(slices [][]string) ([]map[string]string, error) {
+	csvMap := []map[string]string{}
+	headers := slices[0]
+	for _, slice := range slices[1:] {
+		rowMap := make(map[string]string)
+		for i, value := range slice {
+			rowMap[headers[i]] = value
+		}
+		csvMap = append(csvMap, rowMap)
+	}
+	return csvMap, nil
+}
+
+func readFile(fileName string, provider string) ([]map[string]string, error) {
+	absPath, _ := filepath.Abs(fileName)
+	f, err := os.Open(absPath)
 	if err != nil {
 		return nil, err
 	}
-	return r, nil
-}
+	defer f.Close()
 
-func AggregateExpenses(fileName string) error {
-	expenseCategories := &ExpenseCategories{}
-	expenseCategories.AddCategory(&ExpenseCategory{
-		Amount:   0,
-		Category: "Food",
-		Matchers: []string{"maxima", "lidl"},
-	})
+	reader := csv.NewReader(f)
+	if provider == "seb" {
+		reader.LazyQuotes = true
+		reader.Comma = ';'
+	}
 
-	expenses, err := parseExpensesDirectly(fileName)
+	records, err := reader.ReadAll()
 	if err != nil {
-		return err
+		return nil, fmt.Errorf("failed to read file: %w", err)
 	}
 
-	for _, expense := range expenses {
-		for _, expenseCategory := range expenseCategories.categories {
-			if expenseCategory.Match(expense.Description) {
-				expenseCategory.Amount += expense.Amount
-				break //stop matching further categories
-			}
-		}
-	}
-	fmt.Println(expenseCategories)
-	return nil
-}
+	csvMap, err := mapSlicesToMap(records)
 
-func parseExpensesDirectly(fileName string) ([]*Expense, error) {
-	r, err := readFile(fileName)
 	if err != nil {
 		return nil, err
 	}
 
-	expenses := []*Expense{}
-
-	for row, err := range r.Iterate() {
-		if err != nil {
-			return nil, err
-		}
-		expense, err := MapWiseExpense(row)
-		if err != nil {
-			return nil, err
-		}
-		expenses = append(expenses, expense)
-	}
-
-	return expenses, nil
+	return csvMap, nil
 }
+
+// func AggregateExpenses(fileName string) error {
+// 	expenseCategories := &ExpenseCategories{}
+// 	expenseCategories.AddCategory(&ExpenseCategory{
+// 		Amount:   0,
+// 		Category: "Food",
+// 		Matchers: []string{"maxima", "lidl"},
+// 	})
+
+// 	expenses, err := parseExpensesDirectly(fileName)
+// 	if err != nil {
+// 		return err
+// 	}
+
+// 	for _, expense := range expenses {
+// 		for _, expenseCategory := range expenseCategories.categories {
+// 			if expenseCategory.Match(expense.Description) {
+// 				expenseCategory.Amount += expense.Amount
+// 				break //stop matching further categories
+// 			}
+// 		}
+// 	}
+// 	fmt.Println(expenseCategories)
+// 	return nil
+// }
+
+// func parseExpensesDirectly(fileName string) ([]*Expense, error) {
+// 	r, err := readFile(fileName)
+// 	if err != nil {
+// 		return nil, err
+// 	}
+
+// 	expenses := []*Expense{}
+
+// 	for row, err := range r.Iterate() {
+// 		if err != nil {
+// 			return nil, err
+// 		}
+// 		expense, err := MapWiseExpense(row)
+// 		if err != nil {
+// 			return nil, err
+// 		}
+// 		expenses = append(expenses, expense)
+// 	}
+
+// 	return expenses, nil
+// }
