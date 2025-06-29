@@ -1,8 +1,10 @@
 # Expenses aggregator
 
 ### TODO
-- [ ] Add Support for SEB
-- [ ] Add Support for Revolut
-- [ ] Add Support for Wise
-- [ ] Custumizable categories
-- [ ] Expense matchers from a custom file to maintain privacy
+- [x] Add Support for SEB
+- [x] Add Support for Revolut
+- [x] Add Support for Wise
+- [x] Custumizable categories
+- [x] Expense matchers from a custom file to maintain privacy
+- [ ] Interactive CLI manu
+- [ ] Interactive categorization of uncategorized expenses
