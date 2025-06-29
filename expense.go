@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
@@ -12,7 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/urfave/cli/v3"
+	"github.com/gdamore/tcell/v2"
+	"github.com/rivo/tview"
 )
 
 type Expense struct {
@@ -73,7 +73,6 @@ func (e *ExpenseCategories) AddCategory(expense *ExpenseCategory) {
 
 func (e *ExpenseCategory) Match(description string) bool {
 	for _, matcher := range e.Matchers {
-
 		if strings.Contains(description, matcher) {
 			return true
 		}
@@ -157,60 +156,172 @@ func parseAndAggregate(fileName string, provider string) (*ExpenseCategories, []
 
 func main() {
 	//parseAndAggregate("./Išrašas (1).csv", "seb")
-	supportedProviders := []string{"Wise", "SEB", "Revolut"}
-	cmd := &cli.Command{
-		Commands: []*cli.Command{
-			{
-				Name:  "list-supported",
-				Usage: "Lists supported providers",
-				Action: func(ctx context.Context, cmd *cli.Command) error {
-					fmt.Println("Supported providers:", supportedProviders)
-					return nil
-				},
-			},
-			{
-				Name:  "parse-expenses",
-				Usage: "Parses expense report for given provider. Prints out aggregated and categorized expenses",
-				Flags: []cli.Flag{
-					&cli.StringFlag{
-						Name:     "provider",
-						Usage:    "Provider to parse expenses for",
-						Required: true,
-					},
-					&cli.StringFlag{
-						Name:     "file",
-						Usage:    "File to parse expenses from",
-						Required: true,
-					},
-				},
-				Action: func(ctx context.Context, cmd *cli.Command) error {
-					fileName := cmd.String("file")
-					provider := cmd.String("provider")
-					expenseCategories, parsedExpenses, err := parseAndAggregate(fileName, provider)
-					if err != nil {
-						return err
-					}
-					fmt.Println("Grouped categories:")
-					for _, category := range expenseCategories.categories {
-						fmt.Printf("%s: %f\n", category.Category, category.Amount)
-						for _, expense := range category.Expenses {
-							fmt.Printf("\t%s: %f\n", expense.Description, expense.Amount)
-						}
-					}
-					fmt.Println("Unmatched expenses:")
-					for _, expense := range parsedExpenses {
-						if !expense.Matched {
-							fmt.Printf("%s: %f\n", expense.Description, expense.Amount)
-						}
-					}
-					return nil
-				},
-			},
-		},
+
+	fmt.Println("Starting Expense Tracker...")
+	fmt.Println("Creating tview application...")
+
+	app := tview.NewApplication()
+	if app == nil {
+		fmt.Println("Error: Failed to create tview application")
+		return
 	}
-	if err := cmd.Run(context.Background(), os.Args); err != nil {
+
+	fmt.Println("Application created successfully")
+	fmt.Println("Setting up main menu...")
+
+	// Start with the main menu
+	showMainMenu(app)
+
+	fmt.Println("Starting TUI...")
+	fmt.Println("If you see this message but no menu, there might be a terminal compatibility issue.")
+	fmt.Println("Try resizing your terminal or pressing Enter/Escape.")
+
+	// Run the application
+	if err := app.Run(); err != nil {
+		fmt.Printf("Error running application: %v\n", err)
 		log.Fatal(err)
 	}
+
+	fmt.Println("Application exited cleanly.")
+}
+
+func showSupportedProviders(app *tview.Application) {
+	supportedProviders := []string{"Wise", "SEB", "Revolut"}
+
+	// Simple, clear text
+	textContent := "Supported Providers:\n\n"
+	for i, provider := range supportedProviders {
+		textContent += fmt.Sprintf("%d. %s\n", i+1, provider)
+	}
+	textContent += "\nPress ESC to go back or 'q' to quit"
+
+	text := tview.NewTextView()
+	text.SetText(textContent)
+	text.SetBorder(true)
+	text.SetTitle("Supported Providers")
+
+	text.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		switch event.Key() {
+		case tcell.KeyEscape:
+			showMainMenu(app)
+		case tcell.KeyRune:
+			if event.Rune() == 'q' || event.Rune() == 'Q' {
+				app.Stop()
+			}
+		}
+		return event
+	})
+
+	app.SetRoot(text, true)
+}
+
+func showParseExpensesForm(app *tview.Application) {
+	var form *tview.Form
+
+	form = tview.NewForm().
+		AddInputField("File Path", "", 50, nil, nil).
+		AddDropDown("Provider", []string{"wise", "seb", "revolut"}, 0, nil).
+		AddButton("Parse", func() {
+			filePath := form.GetFormItem(0).(*tview.InputField).GetText()
+			_, provider := form.GetFormItem(1).(*tview.DropDown).GetCurrentOption()
+
+			if filePath == "" {
+				showError(app, "File path is required")
+				return
+			}
+
+			parseAndShowResults(app, filePath, provider)
+		}).
+		AddButton("Back", func() {
+			showMainMenu(app)
+		})
+
+	form.SetBorder(true).
+		SetTitle("Parse Expenses").
+		SetTitleAlign(tview.AlignCenter)
+
+	app.SetRoot(form, true)
+}
+
+func parseAndShowResults(app *tview.Application, filePath, provider string) {
+	expenseCategories, parsedExpenses, err := parseAndAggregate(filePath, provider)
+	if err != nil {
+		showError(app, fmt.Sprintf("Error parsing expenses: %v", err))
+		return
+	}
+
+	// Build result text
+	var result strings.Builder
+	result.WriteString("=== Grouped Categories ===\n\n")
+
+	for _, category := range expenseCategories.categories {
+		result.WriteString(fmt.Sprintf("%s: %.2f\n", category.Category, category.Amount))
+		for _, expense := range category.Expenses {
+			result.WriteString(fmt.Sprintf("  • %s: %.2f\n", expense.Description, expense.Amount))
+		}
+		result.WriteString("\n")
+	}
+
+	result.WriteString("\n=== Unmatched Expenses ===\n\n")
+	for _, expense := range parsedExpenses {
+		if !expense.Matched {
+			result.WriteString(fmt.Sprintf("%s: %.2f\n", expense.Description, expense.Amount))
+		}
+	}
+
+	fmt.Println(result.String())
+
+	// Use the actual expense results with the working configuration
+	contentToShow := result.String()
+	if len(contentToShow) == 0 {
+		contentToShow = "No expense data found or processed.\n\nThis could mean:\n- File is empty\n- Wrong provider selected\n- File format issue\n\nPress ESC to go back."
+	}
+
+	// Create textView with the working configuration
+	textView := tview.NewTextView()
+	textView.SetText(contentToShow)
+	textView.SetScrollable(true) // Re-enable scrolling for real data
+	textView.SetWrap(true)
+	textView.SetBorder(true)
+	textView.SetTitle("Expense Results")
+
+	textView.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Key() == tcell.KeyEscape {
+			showMainMenu(app)
+		}
+		return event
+	})
+
+	app.SetRoot(textView, true)
+}
+
+func showError(app *tview.Application, message string) {
+	modal := tview.NewModal().
+		SetText(message).
+		AddButtons([]string{"OK"}).
+		SetDoneFunc(func(buttonIndex int, buttonLabel string) {
+			showMainMenu(app)
+		})
+
+	app.SetRoot(modal, true)
+}
+
+func showMainMenu(app *tview.Application) {
+	menu := tview.NewList()
+	menu.AddItem("List Supported Providers", "View all supported expense providers", 'l', func() {
+		showSupportedProviders(app)
+	})
+	menu.AddItem("Parse Expenses", "Parse and categorize expenses from a file", 'p', func() {
+		showParseExpensesForm(app)
+	})
+	menu.AddItem("Quit", "Exit the application", 'q', func() {
+		app.Stop()
+	})
+
+	menu.SetBorder(true)
+	menu.SetTitle("Expense Tracker")
+
+	app.SetRoot(menu, true)
 }
 
 func parseExpenses(fileName string, provider string) ([]*Expense, error) {
