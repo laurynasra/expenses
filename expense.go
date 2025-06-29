@@ -102,6 +102,7 @@ func parseAndAggregate(fileName string, provider string) (*ExpenseCategories, []
 			"cashback", "converted", "laurynas", "ragauskas",
 			"youtube", "išmoka", "paslaugų planas", "ltg", "kredito", "palūkanų",
 			"mokykla", "agentūra", "polisą", "revolut", "telia",
+			"grazinimai.omniva.lt", "cursor",
 		},
 	})
 
@@ -110,7 +111,8 @@ func parseAndAggregate(fileName string, provider string) (*ExpenseCategories, []
 		Category: "Food",
 		Matchers: []string{
 			"maxima", "lidl", "vaisiai", "darzov", "iki", "rimi", "mangas",
-			"mangu", "turgelis", "arviora",
+			"mangu", "turgelis", "arviora", "rolando daržovės", "assorti",
+			"mesosbroliai", "mesos broliai",
 		},
 	})
 
@@ -128,7 +130,7 @@ func parseAndAggregate(fileName string, provider string) (*ExpenseCategories, []
 		Amount:   0,
 		Category: "Transport",
 		Matchers: []string{
-			"express pro", "circle k", "orlen", "p8", "uab stova",
+			"express pro", "circle k", "orlen", "p8", "uab stova", "bta baltic",
 		},
 	})
 
@@ -136,7 +138,7 @@ func parseAndAggregate(fileName string, provider string) (*ExpenseCategories, []
 		Amount:   0,
 		Category: "Home",
 		Matchers: []string{
-			"knygos", "geliu parduotuve", "geles",
+			"knygos", "geliu parduotuve", "geles", "super-g.watch", "jysk", "moki-vezi",
 		},
 	})
 
