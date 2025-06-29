@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/csv"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -32,6 +33,38 @@ type ExpenseCategory struct {
 
 type ExpenseCategories struct {
 	categories []*ExpenseCategory
+}
+
+// CategoryConfig represents the JSON structure for categories
+type CategoryConfig struct {
+	Name     string   `json:"name"`
+	Matchers []string `json:"matchers"`
+}
+
+// loadCategoriesFromJSON loads expense categories from a JSON file
+func loadCategoriesFromJSON(filename string) (*ExpenseCategories, error) {
+	file, err := os.Open(filename)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open categories file: %w", err)
+	}
+	defer file.Close()
+
+	var configs []CategoryConfig
+	decoder := json.NewDecoder(file)
+	if err := decoder.Decode(&configs); err != nil {
+		return nil, fmt.Errorf("failed to decode JSON: %w", err)
+	}
+
+	expenseCategories := &ExpenseCategories{}
+	for _, config := range configs {
+		expenseCategories.AddCategory(&ExpenseCategory{
+			Amount:   0,
+			Category: config.Name,
+			Matchers: config.Matchers,
+		})
+	}
+
+	return expenseCategories, nil
 }
 
 func (e *ExpenseCategories) AddCategory(expense *ExpenseCategory) {
@@ -92,89 +125,17 @@ func mapSEBExpense(row map[string]string) (*Expense, error) {
 }
 
 func parseAndAggregate(fileName string, provider string) (*ExpenseCategories, []*Expense, error) {
-	expenseCategories := &ExpenseCategories{}
+	// Load categories from JSON file
+	expenseCategories, err := loadCategoriesFromJSON("categories.json")
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to load categories: %w", err)
+	}
 
-	expenseCategories.AddCategory(&ExpenseCategory{
-		Amount:   0,
-		Category: "IGNORE",
-		Matchers: []string{
-			"laurynas ragauskas", "nexo", "apple",
-			"cashback", "converted", "laurynas", "ragauskas",
-			"youtube", "išmoka", "paslaugų planas", "ltg", "kredito", "palūkanų",
-			"mokykla", "agentūra", "polisą", "revolut", "telia",
-			"grazinimai.omniva.lt", "cursor",
-		},
-	})
+	parsedExpenses, err := parseExpenses(fileName, provider)
+	if err != nil {
+		return nil, nil, err
+	}
 
-	expenseCategories.AddCategory(&ExpenseCategory{
-		Amount:   0,
-		Category: "Food",
-		Matchers: []string{
-			"maxima", "lidl", "vaisiai", "darzov", "iki", "rimi", "mangas",
-			"mangu", "turgelis", "arviora", "rolando daržovės", "assorti",
-			"mesosbroliai", "mesos broliai",
-		},
-	})
-
-	expenseCategories.AddCategory(&ExpenseCategory{
-		Amount:   0,
-		Category: "Takeaway",
-		Matchers: []string{
-			"restoranas", "tores", "bravoras", "charlie pizza",
-			"narvesen", "caffeine", "crustum", "sokoladine", "heydekrug",
-			"coffee", "marinara", "mcdonalds", "sushi", "bolt",
-		},
-	})
-
-	expenseCategories.AddCategory(&ExpenseCategory{
-		Amount:   0,
-		Category: "Transport",
-		Matchers: []string{
-			"express pro", "circle k", "orlen", "p8", "uab stova", "bta baltic",
-		},
-	})
-
-	expenseCategories.AddCategory(&ExpenseCategory{
-		Amount:   0,
-		Category: "Home",
-		Matchers: []string{
-			"knygos", "geliu parduotuve", "geles", "super-g.watch", "jysk", "moki-vezi",
-		},
-	})
-
-	expenseCategories.AddCategory(&ExpenseCategory{
-		Amount:   0,
-		Category: "Health",
-		Matchers: []string{
-			"benu", "klinika", "youdek",
-		},
-	})
-
-	expenseCategories.AddCategory(&ExpenseCategory{
-		Amount:   0,
-		Category: "Vacation",
-		Matchers: []string{
-			"antalya",
-		},
-	})
-
-	expenseCategories.AddCategory(&ExpenseCategory{
-		Amount:   0,
-		Category: "Other",
-		Matchers: []string{
-			"royal smoke",
-		},
-	})
-
-	expenseCategories.AddCategory(&ExpenseCategory{
-		Amount:   0,
-		Category: "Clothes",
-		Matchers: []string{
-			"viln nordica sd", // Sports Direct Nordica
-		},
-	})
-
-	parsedExpenses, nil := parseExpenses(fileName, provider)
 	for _, expense := range parsedExpenses {
 		for _, expenseCategory := range expenseCategories.categories {
 			if expenseCategory.Match(strings.ToLower(expense.Description)) {
@@ -195,7 +156,7 @@ func parseAndAggregate(fileName string, provider string) (*ExpenseCategories, []
 }
 
 func main() {
-	parseAndAggregate("./Išrašas (1).csv", "seb")
+	//parseAndAggregate("./Išrašas (1).csv", "seb")
 	supportedProviders := []string{"Wise", "SEB", "Revolut"}
 	cmd := &cli.Command{
 		Commands: []*cli.Command{
