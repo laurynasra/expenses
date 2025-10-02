@@ -161,6 +161,13 @@ func main() {
 	cmd := &cli.Command{
 		Commands: []*cli.Command{
 			{
+				Name:  "tui",
+				Usage: "Launch interactive TUI for expense management",
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					return startTUI()
+				},
+			},
+			{
 				Name:  "list-supported",
 				Usage: "Lists supported providers",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
