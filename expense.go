@@ -74,7 +74,7 @@ func (e *ExpenseCategories) AddCategory(expense *ExpenseCategory) {
 func (e *ExpenseCategory) Match(description string) bool {
 	for _, matcher := range e.Matchers {
 
-		if strings.Contains(description, matcher) {
+		if strings.Contains(strings.ToLower(description), strings.ToLower(matcher)) {
 			return true
 		}
 	}
