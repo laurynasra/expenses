@@ -2,161 +2,16 @@ package main
 
 import (
 	"context"
-	"encoding/csv"
-	"encoding/json"
 	"fmt"
 	"log"
 	"os"
-	"path/filepath"
-	"strconv"
-	"strings"
-	"time"
 
 	"github.com/urfave/cli/v3"
+	expenseapi "laurynasra/expenses/api"
+	"laurynasra/expenses/internal/engine"
 )
 
-type Expense struct {
-	Amount      float64
-	Description string
-	Date        time.Time
-	Provider    string
-	Category    string
-	Matched     bool
-}
-
-type ExpenseCategory struct {
-	Amount   float64
-	Category string
-	Expenses []*Expense
-	Matchers []string
-}
-
-type ExpenseCategories struct {
-	categories []*ExpenseCategory
-}
-
-// CategoryConfig represents the JSON structure for categories
-type CategoryConfig struct {
-	Name     string   `json:"name"`
-	Matchers []string `json:"matchers"`
-}
-
-// loadCategoriesFromJSON loads expense categories from a JSON file
-func loadCategoriesFromJSON(filename string) (*ExpenseCategories, error) {
-	file, err := os.Open(filename)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open categories file: %w", err)
-	}
-	defer file.Close()
-
-	var configs []CategoryConfig
-	decoder := json.NewDecoder(file)
-	if err := decoder.Decode(&configs); err != nil {
-		return nil, fmt.Errorf("failed to decode JSON: %w", err)
-	}
-
-	expenseCategories := &ExpenseCategories{}
-	for _, config := range configs {
-		expenseCategories.AddCategory(&ExpenseCategory{
-			Amount:   0,
-			Category: config.Name,
-			Matchers: config.Matchers,
-		})
-	}
-
-	return expenseCategories, nil
-}
-
-func (e *ExpenseCategories) AddCategory(expense *ExpenseCategory) {
-	e.categories = append(e.categories, expense)
-}
-
-func (e *ExpenseCategory) Match(description string) bool {
-	for _, matcher := range e.Matchers {
-
-		if strings.Contains(strings.ToLower(description), strings.ToLower(matcher)) {
-			return true
-		}
-	}
-	return false
-}
-
-func MapWiseExpense(row map[string]string) (*Expense, error) {
-	amount, err := strconv.ParseFloat(row["Amount"], 64)
-	if err != nil {
-		return nil, err
-	}
-	amount = amount * -1 // Wise shows positive amounts for debits
-
-	description := row["Description"]
-
-	return &Expense{
-		Amount:      amount,
-		Description: description,
-		Provider:    "Wise",
-	}, nil
-}
-
-func mapRevolutExpense(row map[string]string) (*Expense, error) {
-	amount, err := strconv.ParseFloat(row["Amount"], 64)
-	if err != nil {
-		return nil, err
-	}
-	description := row["Description"]
-	return &Expense{
-		Amount:      amount,
-		Description: description,
-		Provider:    "Revolut",
-	}, nil
-}
-
-func mapSEBExpense(row map[string]string) (*Expense, error) {
-	amount, err := strconv.ParseFloat(strings.ReplaceAll(row["SUMA"], ",", "."), 64)
-	if err != nil {
-		return nil, err
-	}
-	description := strings.Join([]string{row["MOKĖTOJO ARBA GAVĖJO PAVADINIMAS"], row["MOKĖJIMO PASKIRTIS"], row["TRANSAKCIJOS TIPAS"]}, " ")
-
-	return &Expense{
-		Amount:      amount,
-		Description: description,
-		Provider:    "SEB",
-	}, nil
-}
-
-func parseAndAggregate(fileName string, provider string) (*ExpenseCategories, []*Expense, error) {
-	// Load categories from JSON file
-	expenseCategories, err := loadCategoriesFromJSON("categories.json")
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to load categories: %w", err)
-	}
-
-	parsedExpenses, err := parseExpenses(fileName, provider)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	for _, expense := range parsedExpenses {
-		for _, expenseCategory := range expenseCategories.categories {
-			if expenseCategory.Match(strings.ToLower(expense.Description)) {
-				expenseCategory.Amount += expense.Amount
-				expense.Matched = true
-				expenseCategory.Expenses = append(expenseCategory.Expenses, expense)
-				break //stop matching further categories
-			}
-		}
-	}
-	unmatchedExpenses := []*Expense{}
-	for _, expense := range parsedExpenses {
-		if !expense.Matched {
-			unmatchedExpenses = append(unmatchedExpenses, expense)
-		}
-	}
-	return expenseCategories, parsedExpenses, nil
-}
-
 func main() {
-	//parseAndAggregate("./Išrašas (1).csv", "seb")
 	supportedProviders := []string{"Wise", "SEB", "Revolut"}
 	cmd := &cli.Command{
 		Commands: []*cli.Command{
@@ -193,12 +48,12 @@ func main() {
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					fileName := cmd.String("file")
 					provider := cmd.String("provider")
-					expenseCategories, parsedExpenses, err := parseAndAggregate(fileName, provider)
+					expenseCategories, parsedExpenses, err := engine.ParseAndAggregate(fileName, provider, "categories.json")
 					if err != nil {
 						return err
 					}
 					fmt.Println("Grouped categories:")
-					for _, category := range expenseCategories.categories {
+					for _, category := range expenseCategories.Categories {
 						fmt.Printf("%s: %f\n", category.Category, category.Amount)
 						for _, expense := range category.Expenses {
 							fmt.Printf("\t%s: %f\n", expense.Description, expense.Amount)
@@ -213,80 +68,28 @@ func main() {
 					return nil
 				},
 			},
+			{
+				Name:  "serve",
+				Usage: "Start HTTP API server for web interface",
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:  "port",
+						Usage: "Port to listen on",
+						Value: "8080",
+					},
+					&cli.StringFlag{
+						Name:  "categories",
+						Usage: "Path to categories JSON file",
+						Value: "categories.json",
+					},
+				},
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					return expenseapi.StartServer(cmd.String("port"), cmd.String("categories"))
+				},
+			},
 		},
 	}
 	if err := cmd.Run(context.Background(), os.Args); err != nil {
 		log.Fatal(err)
 	}
-}
-
-func parseExpenses(fileName string, provider string) ([]*Expense, error) {
-	rawExpenses, err := readFile(fileName, provider)
-	if err != nil {
-		return nil, err
-	}
-	expenses := []*Expense{}
-
-	var mapper func(map[string]string) (*Expense, error)
-
-	if provider == "wise" {
-		mapper = MapWiseExpense
-	} else if provider == "revolut" {
-		mapper = mapRevolutExpense
-	} else if provider == "seb" {
-		mapper = mapSEBExpense
-	} else {
-		return nil, fmt.Errorf("provider %s not supported", provider)
-	}
-
-	for _, row := range rawExpenses {
-		expense, err := mapper(row)
-		if err != nil {
-			return nil, err
-		}
-		expenses = append(expenses, expense)
-	}
-
-	return expenses, nil
-}
-
-func mapSlicesToMap(slices [][]string) ([]map[string]string, error) {
-	csvMap := []map[string]string{}
-	headers := slices[0]
-	for _, slice := range slices[1:] {
-		rowMap := make(map[string]string)
-		for i, value := range slice {
-			rowMap[headers[i]] = value
-		}
-		csvMap = append(csvMap, rowMap)
-	}
-	return csvMap, nil
-}
-
-func readFile(fileName string, provider string) ([]map[string]string, error) {
-	absPath, _ := filepath.Abs(fileName)
-	f, err := os.Open(absPath)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-
-	reader := csv.NewReader(f)
-	if provider == "seb" {
-		reader.LazyQuotes = true
-		reader.Comma = ';'
-	}
-
-	records, err := reader.ReadAll()
-	if err != nil {
-		return nil, fmt.Errorf("failed to read file: %w", err)
-	}
-
-	csvMap, err := mapSlicesToMap(records)
-
-	if err != nil {
-		return nil, err
-	}
-
-	return csvMap, nil
 }

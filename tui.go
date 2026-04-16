@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -11,6 +10,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"laurynasra/expenses/internal/engine"
 )
 
 // View states
@@ -66,9 +66,9 @@ type model struct {
 	state               viewState
 	selectedProvider    string
 	filePath            string
-	expenseCategories   *ExpenseCategories
-	allExpenses         []*Expense
-	unmatchedExpenses   []*Expense
+	expenseCategories   *engine.ExpenseCategories
+	allExpenses         []*engine.Expense
+	unmatchedExpenses   []*engine.Expense
 	textInput           textinput.Model
 	matcherInput        textinput.Model
 	list                list.Model
@@ -78,7 +78,7 @@ type model struct {
 	successMsg          string
 	width               int
 	height              int
-	inputMode           bool // true when entering matcher
+	inputMode           bool
 }
 
 type item string
@@ -135,13 +135,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.state == mainMenuView {
 				return m, tea.Quit
 			}
-			// Go back to main menu from other views
 			m.state = mainMenuView
 			m.err = ""
 			return m, nil
 
 		case "esc":
-			// Go back to previous view
 			switch m.state {
 			case providerSelectionView, summaryView:
 				m.state = mainMenuView
@@ -179,7 +177,6 @@ func (m model) updateMainMenu(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		selected := m.list.SelectedItem()
 		if selected != nil {
 			if selected.FilterValue() == "Parse Expenses" {
-				// Create provider list
 				providers := []list.Item{
 					item("wise"),
 					item("revolut"),
@@ -222,7 +219,6 @@ func (m model) updateFileInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "enter":
 		m.filePath = m.textInput.Value()
 
-		// Validate file exists
 		absPath, err := filepath.Abs(m.filePath)
 		if err != nil {
 			m.err = fmt.Sprintf("Invalid path: %v", err)
@@ -234,8 +230,7 @@ func (m model) updateFileInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		// Parse expenses
-		categories, expenses, err := parseAndAggregate(m.filePath, m.selectedProvider)
+		categories, expenses, err := engine.ParseAndAggregate(m.filePath, m.selectedProvider, "categories.json")
 		if err != nil {
 			m.err = fmt.Sprintf("Error parsing: %v", err)
 			return m, nil
@@ -243,7 +238,7 @@ func (m model) updateFileInput(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 
 		m.expenseCategories = categories
 		m.allExpenses = expenses
-		m.unmatchedExpenses = []*Expense{}
+		m.unmatchedExpenses = []*engine.Expense{}
 		for _, exp := range expenses {
 			if !exp.Matched {
 				m.unmatchedExpenses = append(m.unmatchedExpenses, exp)
@@ -267,7 +262,7 @@ func (m model) updateSummary(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.cursor--
 		}
 	case "down", "j":
-		maxCursor := len(m.expenseCategories.categories) + 1
+		maxCursor := len(m.expenseCategories.Categories) + 1
 		if len(m.unmatchedExpenses) > 0 {
 			maxCursor++
 		}
@@ -275,14 +270,12 @@ func (m model) updateSummary(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.cursor++
 		}
 	case "enter":
-		// First N items are categories
-		if m.cursor < len(m.expenseCategories.categories) {
+		if m.cursor < len(m.expenseCategories.Categories) {
 			m.selectedCategoryIdx = m.cursor
 			m.state = categoryBrowserView
 			return m, nil
 		}
-		// Last item (if exists) is uncategorized
-		if len(m.unmatchedExpenses) > 0 && m.cursor == len(m.expenseCategories.categories) {
+		if len(m.unmatchedExpenses) > 0 && m.cursor == len(m.expenseCategories.Categories) {
 			m.state = uncategorizedView
 			m.selectedCategoryIdx = 0
 			return m, nil
@@ -298,7 +291,7 @@ func (m model) updateCategoryBrowser(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.cursor--
 		}
 	case "down", "j":
-		category := m.expenseCategories.categories[m.selectedCategoryIdx]
+		category := m.expenseCategories.Categories[m.selectedCategoryIdx]
 		if m.cursor < len(category.Expenses)-1 {
 			m.cursor++
 		}
@@ -311,62 +304,52 @@ func (m model) updateUncategorized(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Handle matcher input mode
 	if m.inputMode {
 		var cmd tea.Cmd
 		switch msg.String() {
 		case "enter":
-			// Get the matcher and save it
 			matcher := strings.TrimSpace(m.matcherInput.Value())
-			categoryIdx := m.cursor // cursor holds the selected category index during input mode
+			categoryIdx := m.cursor
 
-			if matcher != "" && categoryIdx < len(m.expenseCategories.categories) {
-				category := m.expenseCategories.categories[categoryIdx]
+			if matcher != "" && categoryIdx < len(m.expenseCategories.Categories) {
+				category := m.expenseCategories.Categories[categoryIdx]
 
-				// Add matcher to category and save to file
 				category.Matchers = append(category.Matchers, matcher)
-				if err := saveCategoriesJSON("categories.json", m.expenseCategories); err != nil {
+				if err := engine.SaveCategories("categories.json", m.expenseCategories); err != nil {
 					m.err = fmt.Sprintf("Failed to save matcher: %v", err)
 				}
 
-				// Apply the new matcher to all unmatched expenses
-				remainingExpenses := []*Expense{}
+				remainingExpenses := []*engine.Expense{}
 				matchedCount := 0
 				for _, expense := range m.unmatchedExpenses {
 					if strings.Contains(strings.ToLower(expense.Description), strings.ToLower(matcher)) {
-						// This expense matches the new matcher - categorize it
 						category.Amount += expense.Amount
 						expense.Matched = true
 						expense.Category = category.Category
 						category.Expenses = append(category.Expenses, expense)
 						matchedCount++
 					} else {
-						// Keep in unmatched list
 						remainingExpenses = append(remainingExpenses, expense)
 					}
 				}
 				m.unmatchedExpenses = remainingExpenses
 
-				// Set success message
 				if matchedCount > 0 {
 					m.successMsg = fmt.Sprintf("✓ Categorized %d expense(s) to %s with matcher '%s'",
 						matchedCount, category.Category, matcher)
 					m.err = ""
 				}
 
-				// Adjust cursor to stay in bounds
 				if m.selectedCategoryIdx >= len(m.unmatchedExpenses) && len(m.unmatchedExpenses) > 0 {
 					m.selectedCategoryIdx = len(m.unmatchedExpenses) - 1
 				} else if len(m.unmatchedExpenses) == 0 {
 					m.selectedCategoryIdx = 0
 				}
 
-				// Exit input mode
 				m.inputMode = false
 				m.matcherInput.SetValue("")
 				m.matcherInput.Blur()
 
-				// Go back to summary if all categorized
 				if len(m.unmatchedExpenses) == 0 {
 					m.state = summaryView
 					m.cursor = 0
@@ -375,11 +358,10 @@ func (m model) updateUncategorized(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 
 		case "esc":
-			// Cancel input mode
 			m.inputMode = false
 			m.matcherInput.SetValue("")
 			m.matcherInput.Blur()
-			m.successMsg = "" // Clear success message when canceling
+			m.successMsg = ""
 			return m, nil
 		}
 
@@ -387,30 +369,27 @@ func (m model) updateUncategorized(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
-	// Normal navigation mode
 	switch msg.String() {
 	case "up", "k":
 		if m.selectedCategoryIdx > 0 {
 			m.selectedCategoryIdx--
-			m.successMsg = "" // Clear success message on navigation
+			m.successMsg = ""
 		}
 	case "down", "j":
 		if m.selectedCategoryIdx < len(m.unmatchedExpenses)-1 {
 			m.selectedCategoryIdx++
-			m.successMsg = "" // Clear success message on navigation
+			m.successMsg = ""
 		}
 	case "1", "2", "3", "4", "5", "6", "7", "8", "9":
-		// Enter input mode for matcher
 		categoryIdx := int(msg.String()[0] - '1')
-		if categoryIdx < len(m.expenseCategories.categories) {
+		if categoryIdx < len(m.expenseCategories.Categories) {
 			m.cursor = categoryIdx
 			m.inputMode = true
 			m.matcherInput.Focus()
 			m.matcherInput.SetValue("")
-			m.successMsg = "" // Clear success message when entering input mode
+			m.successMsg = ""
 		}
 	case "s":
-		// Skip this expense without categorizing
 		m.unmatchedExpenses = append(m.unmatchedExpenses[:m.selectedCategoryIdx],
 			m.unmatchedExpenses[m.selectedCategoryIdx+1:]...)
 
@@ -422,7 +401,7 @@ func (m model) updateUncategorized(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.state = summaryView
 			m.cursor = 0
 		}
-		m.successMsg = "" // Clear success message on skip
+		m.successMsg = ""
 	}
 	return m, nil
 }
@@ -476,16 +455,14 @@ func (m model) viewSummary() string {
 
 	s.WriteString(titleStyle.Render("Expense Summary") + "\n\n")
 
-	// Calculate total
 	total := 0.0
-	for _, cat := range m.expenseCategories.categories {
+	for _, cat := range m.expenseCategories.Categories {
 		total += cat.Amount
 	}
 
 	s.WriteString(fmt.Sprintf("Total Expenses: %s\n\n", amountStyle.Render(fmt.Sprintf("€%.2f", total))))
 
-	// Category list with bars
-	for i, cat := range m.expenseCategories.categories {
+	for i, cat := range m.expenseCategories.Categories {
 		if cat.Amount == 0 {
 			continue
 		}
@@ -495,9 +472,8 @@ func (m model) viewSummary() string {
 			cursor = ">"
 		}
 
-		// Calculate percentage bar
 		percentage := (cat.Amount / total) * 100
-		barWidth := int(percentage / 2) // Max 50 chars for 100%
+		barWidth := int(percentage / 2)
 		if barWidth > 50 {
 			barWidth = 50
 		}
@@ -517,15 +493,14 @@ func (m model) viewSummary() string {
 		}
 	}
 
-	// Unmatched expenses option
 	if len(m.unmatchedExpenses) > 0 {
 		s.WriteString("\n")
 		cursor := " "
-		if m.cursor == len(m.expenseCategories.categories) {
+		if m.cursor == len(m.expenseCategories.Categories) {
 			cursor = ">"
 		}
 		line := fmt.Sprintf("%s ⚠️  Uncategorized Expenses (%d)", cursor, len(m.unmatchedExpenses))
-		if m.cursor == len(m.expenseCategories.categories) {
+		if m.cursor == len(m.expenseCategories.Categories) {
 			s.WriteString(selectedStyle.Render(line) + "\n")
 		} else {
 			s.WriteString(line + "\n")
@@ -538,7 +513,7 @@ func (m model) viewSummary() string {
 }
 
 func (m model) viewCategoryBrowser() string {
-	category := m.expenseCategories.categories[m.selectedCategoryIdx]
+	category := m.expenseCategories.Categories[m.selectedCategoryIdx]
 
 	var s strings.Builder
 	s.WriteString(titleStyle.Render(fmt.Sprintf("%s - €%.2f", category.Category, category.Amount)) + "\n\n")
@@ -577,7 +552,6 @@ func (m model) viewUncategorized() string {
 		return "\n" + s.String()
 	}
 
-	// Show current expense
 	exp := m.unmatchedExpenses[m.selectedCategoryIdx]
 	expBox := boxStyle.Render(fmt.Sprintf(
 		"Description: %s\nAmount: %s\nProvider: %s\n\nExpense %d of %d",
@@ -589,14 +563,12 @@ func (m model) viewUncategorized() string {
 	))
 	s.WriteString(expBox + "\n\n")
 
-	// Show success message if present
 	if m.successMsg != "" {
 		s.WriteString(successStyle.Render(m.successMsg) + "\n\n")
 	}
 
-	// If in input mode, show matcher input
 	if m.inputMode {
-		selectedCategory := m.expenseCategories.categories[m.cursor]
+		selectedCategory := m.expenseCategories.Categories[m.cursor]
 		s.WriteString(fmt.Sprintf("Categorizing to: %s\n\n", categoryStyle.Render(selectedCategory.Category)))
 		s.WriteString("Enter keyword/matcher to save for future auto-categorization:\n")
 		s.WriteString(m.matcherInput.View() + "\n\n")
@@ -607,9 +579,8 @@ func (m model) viewUncategorized() string {
 
 		s.WriteString(helpStyle.Render("enter: save & categorize • esc: cancel"))
 	} else {
-		// Show category options
 		s.WriteString("Select category:\n")
-		for i, cat := range m.expenseCategories.categories {
+		for i, cat := range m.expenseCategories.Categories {
 			if i < 9 {
 				s.WriteString(fmt.Sprintf(" %d. %s\n", i+1, categoryStyle.Render(cat.Category)))
 			}
@@ -625,27 +596,4 @@ func startTUI() error {
 	p := tea.NewProgram(initialModel(), tea.WithAltScreen())
 	_, err := p.Run()
 	return err
-}
-
-// saveCategoriesJSON saves expense categories back to JSON file
-func saveCategoriesJSON(filename string, expenseCategories *ExpenseCategories) error {
-	configs := make([]CategoryConfig, 0, len(expenseCategories.categories))
-
-	for _, cat := range expenseCategories.categories {
-		configs = append(configs, CategoryConfig{
-			Name:     cat.Category,
-			Matchers: cat.Matchers,
-		})
-	}
-
-	data, err := json.MarshalIndent(configs, "", "  ")
-	if err != nil {
-		return fmt.Errorf("failed to marshal categories: %w", err)
-	}
-
-	if err := os.WriteFile(filename, data, 0644); err != nil {
-		return fmt.Errorf("failed to write file: %w", err)
-	}
-
-	return nil
 }
